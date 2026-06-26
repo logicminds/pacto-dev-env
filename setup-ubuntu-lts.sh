@@ -19,6 +19,17 @@ err()  { echo -e "${RED}[error]${NC} $*" >&2; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+run_privileged() {
+  if [[ "$EUID" -eq 0 ]]; then
+    "$@"
+  elif command_exists sudo; then
+    sudo "$@"
+  else
+    err "This step needs root privileges, but neither root nor sudo is available."
+    exit 1
+  fi
+}
+
 apt_pkg_installed() {
   dpkg-query -W -f='${Status}\n' "$1" 2>/dev/null | grep -q "^install ok installed$"
 }
@@ -26,11 +37,10 @@ apt_pkg_installed() {
 append_if_missing() {
   local file="$1"
   local line="$2"
-  if [[ -f "$file" ]]; then
-    grep -Fxq "$line" "$file" || echo "$line" >> "$file"
-  else
-    echo "$line" >> "$file"
+  if [[ -f "$file" ]] && grep -Fxq "$line" "$file" 2>/dev/null; then
+    return 0
   fi
+  echo "$line" >> "$file"
 }
 
 # ---------------------------------------------------------------------------
@@ -39,7 +49,7 @@ append_if_missing() {
 
 install_system_packages() {
   log "Updating apt package lists..."
-  apt-get update
+  run_privileged apt-get update
 
   local pkgs=(
     # Core build toolchain
@@ -75,7 +85,7 @@ install_system_packages() {
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     log "Installing missing system packages: ${missing[*]}"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+    DEBIAN_FRONTEND=noninteractive run_privileged apt-get install -y --no-install-recommends "${missing[@]}"
   else
     log "All required system packages already installed."
   fi
@@ -86,34 +96,35 @@ install_system_packages() {
 # ---------------------------------------------------------------------------
 
 install_docker() {
-  if command_exists docker && command_exists "docker compose" 2>/dev/null || docker compose version >/dev/null 2>&1; then
+  if command_exists docker && { command_exists "docker compose" 2>/dev/null || docker compose version >/dev/null 2>&1; }; then
     log "Docker and Docker Compose already installed: $(docker --version), $(docker compose version)"
     return 0
   fi
 
   log "Installing Docker Engine and Docker Compose plugin..."
-  install -m 0755 -d /etc/apt/keyrings
+  run_privileged install -m 0755 -d /etc/apt/keyrings
   if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
+    run_privileged bash -c "curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
+    run_privileged chmod a+r /etc/apt/keyrings/docker.asc
   fi
 
   local arch="$(dpkg --print-architecture)"
   local codename="$(lsb_release -cs 2>/dev/null || echo "noble")"
   local repo_line="deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${codename} stable"
 
-  if ! grep -Fxq "$repo_line" /etc/apt/sources.list.d/docker.list 2>/dev/null; then
-    echo "$repo_line" > /etc/apt/sources.list.d/docker.list
+  if ! run_privileged grep -Fxq "$repo_line" /etc/apt/sources.list.d/docker.list 2>/dev/null; then
+    run_privileged bash -c "echo '$repo_line' > /etc/apt/sources.list.d/docker.list"
   fi
 
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  run_privileged apt-get update
+  DEBIAN_FRONTEND=noninteractive run_privileged apt-get install -y --no-install-recommends \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   # Ensure the calling user can use Docker without sudo on next login.
-  if [[ -n "${SUDO_USER:-}" ]]; then
-    usermod -aG docker "$SUDO_USER" || true
-    log "Added $SUDO_USER to the docker group. Log out and back in for this to take effect."
+  local target_user="${SUDO_USER:-${USER:-$(logname 2>/dev/null || whoami)}}"
+  if [[ -n "$target_user" && "$target_user" != "root" ]]; then
+    run_privileged usermod -aG docker "$target_user" || true
+    log "Added $target_user to the docker group. Log out and back in for this to take effect."
   fi
 }
 
@@ -149,27 +160,30 @@ install_node() {
     node_version="$(node --version | sed 's/^v//')"
     local major_version
     major_version="$(echo "$node_version" | cut -d. -f1)"
-    if [[ "$major_version" -ge 20 ]]; then
+    if [[ "$major_version" -ge 24 ]]; then
       log "Node.js already installed: v${node_version}"
       return 0
     else
-      warn "Node.js v${node_version} is too old; installing Node 20..."
+      warn "Node.js v${node_version} is too old; installing Node 24..."
     fi
   fi
 
-  log "Installing Node.js 20 from NodeSource..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs
+  log "Installing Node.js 24 from NodeSource..."
+  curl -fsSL https://deb.nodesource.com/setup_24.x | run_privileged bash -
+  DEBIAN_FRONTEND=noninteractive run_privileged apt-get install -y --no-install-recommends nodejs
 }
 
 install_pnpm() {
   if command_exists pnpm; then
     log "pnpm already installed: $(pnpm --version)"
-  else
-    log "Enabling pnpm via Corepack..."
-    corepack enable
-    corepack prepare pnpm@latest --activate
+    return 0
   fi
+
+  # Corepack needs to write to /usr/bin when Node.js is installed via Debian
+  # packages, so run it through sudo only when not root.
+  log "Enabling pnpm via Corepack..."
+  run_privileged corepack enable
+  run_privileged corepack prepare pnpm@latest --activate
 }
 
 # ---------------------------------------------------------------------------
@@ -196,8 +210,42 @@ install_aztec_cli() {
     log "Aztec sandbox version manager already installed: $(aztec-sandbox --version 2>/dev/null || echo 'unknown version')"
   else
     log "Installing Aztec sandbox version manager..."
-    /bin/bash -c "$(curl -fsSL 'https://raw.githubusercontent.com/AztecProtocol/sandbox-version-manager/master/install.sh')"
+    /bin/bash -c "$(curl -fsSL 'https://raw.githubusercontent.com/AztecProtocol/sandbox-version-manager/master/install.sh')" || warn "Aztec sandbox version manager install failed; continuing."
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Homebrew + GitHub CLI
+# ---------------------------------------------------------------------------
+
+install_brew() {
+  if command_exists brew; then
+    log "Homebrew already installed: $(brew --version | head -1)"
+    return 0
+  fi
+
+  log "Installing Homebrew..."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+  # The official installer may use /home/linuxbrew/.linuxbrew when passwordless
+  # sudo is available, or $HOME/.linuxbrew otherwise. Source whichever exists.
+  if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" 2>/dev/null || true
+  elif [[ -x "$HOME/.linuxbrew/bin/brew" ]]; then
+    eval "$("$HOME/.linuxbrew/bin/brew" shellenv)" 2>/dev/null || true
+  fi
+}
+
+install_gh_cli() {
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv 2>/dev/null || "$HOME/.linuxbrew/bin/brew" shellenv 2>/dev/null || true)"
+
+  if command_exists gh; then
+    log "GitHub CLI already installed: $(gh --version | head -1)"
+    return 0
+  fi
+
+  log "Installing GitHub CLI via Homebrew..."
+  brew install gh
 }
 
 # ---------------------------------------------------------------------------
@@ -215,6 +263,7 @@ configure_shell() {
 
   append_if_missing "$shell_rc" ''
   append_if_missing "$shell_rc" '# Pacto dev environment'
+  append_if_missing "$shell_rc" 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv 2>/dev/null || $HOME/.linuxbrew/bin/brew shellenv 2>/dev/null || true)"'
   append_if_missing "$shell_rc" 'export PATH="$HOME/.cargo/bin:$HOME/.foundry/bin:$HOME/.aztec/bin:$PATH"'
   append_if_missing "$shell_rc" 'source "$HOME/.cargo/env" 2>/dev/null || true'
 
@@ -249,7 +298,7 @@ clone_repos() {
 verify_install() {
   log "Verifying installed tools..."
 
-  export PATH="$HOME/.cargo/bin:$HOME/.foundry/bin:$HOME/.aztec/bin:$PATH"
+  export PATH="$HOME/.cargo/bin:$HOME/.foundry/bin:$HOME/.aztec/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.linuxbrew/bin:$PATH"
   source "$HOME/.cargo/env" 2>/dev/null || true
 
   docker --version
@@ -261,6 +310,9 @@ verify_install() {
   forge --version
   anvil --version
   cast --version
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv 2>/dev/null || "$HOME/.linuxbrew/bin/brew" shellenv 2>/dev/null || true)"
+  brew --version | head -1
+  gh --version | head -1
   if command_exists aztec-sandbox; then
     aztec-sandbox --version 2>/dev/null || warn "aztec-sandbox present but could not print version."
   else
@@ -275,8 +327,14 @@ verify_install() {
 main() {
   log "Starting Pacto dev setup for Ubuntu LTS..."
 
-  if [[ "$EUID" -ne 0 ]]; then
-    err "This script must be run with sudo, e.g.:\n  sudo ./dev-setup/setup-ubuntu-lts.sh"
+  if [[ "$EUID" -eq 0 ]] && [[ -z "${SUDO_USER:-}" ]]; then
+    warn "Running as root. The script will install tools for root, not for your desktop user."
+    warn "Consider running as a normal user so the script can use sudo only when needed."
+  fi
+
+  if [[ "$EUID" -ne 0 ]] && ! command_exists sudo; then
+    err "This script needs sudo for installing system packages, but sudo is not installed."
+    err "Install sudo or run the script as root."
     exit 1
   fi
 
@@ -287,6 +345,8 @@ main() {
   install_pnpm
   install_foundry
   install_aztec_cli
+  install_brew
+  install_gh_cli
   configure_shell
   clone_repos "${1:-$HOME/src/covenant-gov}"
   verify_install
@@ -298,7 +358,7 @@ main() {
   log "  pnpm run tauri:dev"
   log ""
   log "To start the local Docker services:"
-  log "  cd dev-setup"
+  log "  cd pacto-dev-env"
   log "  docker compose up -d --build"
 }
 

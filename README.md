@@ -1,15 +1,31 @@
-# Pacto Ecosystem Dev Setup
+# Getting Started — Pacto Ecosystem Development
 
-This directory contains everything needed to spin up a local development environment for Pacto and its directly-related apps, libraries, and dependencies.
+This guide gets you from zero to a working local dev environment for Pacto and its directly-related apps, libraries, and dependencies.
 
-## Files
+This is the single onboarding document: quick-start commands up front, full explanations and per-project workflows below.
 
-| File | Purpose |
-|------|---------|
-| `relay-config.toml` | Relay configuration passed into the Nostr relay container. |
-| `setup-macos-arm64.sh` | One-shot setup script for Apple Silicon Macs. |
-| `setup-ubuntu-lts.sh` | One-shot setup script for Ubuntu 24.04/24.10/26.04 LTS. |
-| `docker/` | Local Dockerfiles that build native arm64/amd64 images for the relay, anvil, Aztec wrapper, and NIP-46 bunker. |
+---
+
+## What this covers
+
+This repo (`pacto-dev-env`) provides the shared local services that all Covenant Gov projects need:
+
+- Nostr relay on `ws://localhost:7000`
+- Anvil EVM testnet on `http://localhost:8545`
+- Aztec sandbox on `http://localhost:8080` (opt-in profile)
+- NIP-46 bunker on `http://127.0.0.1:3001` (opt-in profile)
+
+You then work on the individual projects that consume these services:
+
+- `pacto-app` — Rust/Tauri desktop client
+- `pacto-gov` — Solidity governance contracts ("Nave Pirata")
+- `pacto-squad-sponsor` — gas-sponsorship contract
+- `delegated-security-manager` — Hats-based security module
+- `pacto-aztec` — Noir/TypeScript Aztec privacy layer
+- `nostr-k-derivs` — Nostr-key-to-chain-address derivation
+
+---
+
 ## Quick start (Docker)
 
 ### 1. One-shot host setup
@@ -17,79 +33,361 @@ This directory contains everything needed to spin up a local development environ
 **macOS (Apple Silicon):**
 
 ```bash
-./dev-setup/setup-macos-arm64.sh
+bash ./setup-macos-arm64.sh
 ```
 
 **Ubuntu 24.04/24.10/26.04 LTS:**
 
 ```bash
-sudo ./dev-setup/setup-ubuntu-lts.sh
+bash ./setup-ubuntu-lts.sh
 ```
 
-The Ubuntu script installs Docker, Rust, Node 20, pnpm, Foundry, Aztec sandbox version manager, Tauri system dependencies, and clones the Covenant Gov repos into `~/src/covenant-gov/`. It is idempotent — re-running it skips already-installed tools.
+Both scripts are idempotent — re-running skips already-installed tools. The Ubuntu script installs Docker, Rust, Node 24, pnpm, Foundry, the Aztec sandbox version manager, and Tauri system dependencies. It prompts for `sudo` only when a step actually needs elevated privileges (for example, installing system packages).
 
 ### 2. Start the local services
 
 ```bash
-cd dev-setup
-mkdir -p data/relay
+cd pacto-dev-env
 docker compose up -d --build
 ```
 
-This builds and starts:
+This builds native arm64/amd64 images from `docker/` and starts:
+
 - Nostr relay on `ws://localhost:7000`
 - Anvil EVM testnet on `http://localhost:8545`
 
-The images are built locally from the Dockerfiles in `dev-setup/docker/`, so the first run will take several minutes. All images run natively on Apple Silicon and x86_64 Linux (no Rosetta emulation or `platform:` pinning).
+The first build compiles Foundry, nostr-rs-relay, Bunker46, and the Aztec wrapper from source, so expect several minutes.
 
-### Aztec sandbox
-
-Enable the Aztec profile when you are working on `pacto-aztec`:
+### Optional profiles
 
 ```bash
+# For pacto-aztec work
+# Adds Aztec RPC on http://localhost:8080 and admin API on http://localhost:8880.
+docker compose --profile aztec up -d --build
+
+# For NIP-46 bunker signing tests
+# Adds Bunker46 server on http://127.0.0.1:3001 with Postgres and Redis.
+docker compose --profile bunker up -d --build
+
+# Both can be combined
+docker compose --profile aztec --profile bunker up -d --build
+```
+
+> Aztec is heavy. Allocate at least 8 GB of RAM to Docker and expect a 2–3 minute startup while it deploys L1 contracts to Anvil.
+
+### Verify the default stack
+
+```bash
+export PATH="$HOME/.foundry/bin:$PATH"
+cast block-number --rpc-url http://localhost:8545
+curl -s http://localhost:7000 | head -5
+```
+
+---
+
+## Manual prerequisites
+
+If you prefer not to use the setup scripts, install these first.
+
+### Docker and Docker Compose
+
+Docker is required because every local service is containerized. Install Docker Engine or Docker Desktop, then verify:
+
+```bash
+docker --version
+docker compose version
+```
+
+Recommended minimum resources:
+
+| Service | RAM |
+|---------|-----|
+| Pacto build + relay | 4 GB |
+| Aztec sandbox | 8 GB |
+| Everything together | 12–16 GB |
+
+### Rust
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustc --version
+cargo --version
+```
+
+### Node.js / pnpm
+
+Pacto uses pnpm. Node 24 is recommended:
+
+```bash
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm --version
+```
+
+### Foundry (for EVM contracts)
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+anvil --version
+forge --version
+cast --version
+```
+
+### System dependencies
+
+**Ubuntu/Debian (Tauri):**
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential cmake clang libclang-dev curl wget file git pkg-config \
+  libvulkan-dev libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+  libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+```
+
+**macOS / Apple Silicon:**
+
+```bash
+xcode-select --install
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then install the tool chain:
+
+```bash
+brew install docker rustup node@24 pnpm foundry cmake llvm pkg-config openssl@3 git wget
+echo 'export PATH="$(brew --prefix llvm)/bin:$PATH"' >> ~/.zshrc
+echo 'export LIBCLANG_PATH="$(brew --prefix llvm)/lib"' >> ~/.zshrc
+echo 'export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$PKG_CONFIG_PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Windows:** use WSL2 with the Ubuntu instructions above. Tauri builds on native Windows are supported but slower.
+
+---
+
+## Clone the ecosystem
+
+Before cloning, decide:
+
+1. **Where do you want the workspace?** The examples below use `~/src/covenant-gov`, but you can choose any directory.
+2. **Which repositories do you need?** Most people only need the project they are actively working on. The shared services in `pacto-dev-env` run independently.
+
+| If you are working on... | Clone this repo |
+|--------------------------|-----------------|
+| The desktop app | `pacto-app` |
+| Solidity governance contracts | `pacto-gov` |
+| Gas-sponsorship contract | `pacto-squad-sponsor` |
+| Aztec privacy layer | `pacto-aztec` |
+| Nostr key derivations | `nostr-k-derivs` |
+| Security module | `delegated-security-manager` |
+| Download site / landing page | `pacto-download` |
+
+For example, to work only on `pacto-app` under `~/src/covenant-gov`:
+
+```bash
+mkdir -p ~/src/covenant-gov
+cd ~/src/covenant-gov
+
+git clone https://github.com/covenant-gov/pacto-app.git
+```
+
+If you want everything, clone all of them:
+
+```bash
+mkdir -p ~/src/covenant-gov
+cd ~/src/covenant-gov
+
+git clone https://github.com/covenant-gov/pacto-app.git
+git clone https://github.com/covenant-gov/pacto-gov.git
+git clone https://github.com/covenant-gov/pacto-squad-sponsor.git
+git clone https://github.com/covenant-gov/pacto-aztec.git
+git clone https://github.com/covenant-gov/nostr-k-derivs.git
+git clone https://github.com/covenant-gov/delegated-security-manager.git
+git clone https://github.com/covenant-gov/pacto-download.git
+```
+
+> The one-shot setup scripts can do this for you, but they default to `~/src/covenant-gov` and clone all repositories. If you prefer a different directory or a subset of repos, run the manual `git clone` steps instead.
+
+---
+
+## Project workflows
+
+All workflows assume the default Docker services are running:
+
+```bash
+cd pacto-dev-env
+docker compose up -d --build
+```
+
+### Build and run `pacto-app`
+
+```bash
+cd ~/src/covenant-gov/pacto-app
+pnpm install
+pnpm run tauri:dev
+```
+
+First build downloads and compiles many Rust crates — expect several minutes.
+
+To run just the frontend in a browser:
+
+```bash
+pnpm dev
+```
+
+#### Connect `pacto-app` to the local EVM chain
+
+1. Start the dev services: `cd pacto-dev-env && docker compose up -d --build`.
+2. In `pacto-app`, open **Settings → Wallet / Network**.
+3. Add a custom EVM network:
+   - Name: `Pacto Local`
+   - RPC URL: `http://localhost:8545`
+   - Chain ID: `31337`
+   - Currency symbol: `ETH`
+4. Import the default Anvil private key for a test account:
+   - Account #0 key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
+   - **Never use this key outside of local development.**
+
+#### Common `pacto-app` build fixes
+
+| Error | Fix |
+|-------|-----|
+| `webkit2gtk-4.1` not found | `sudo apt install libwebkit2gtk-4.1-dev` |
+| `openssl-sys` build fails | `sudo apt install libssl-dev pkg-config` |
+| `bindgen` errors | `sudo apt install clang libclang-dev` |
+| Vulkan errors on Linux | `sudo apt install libvulkan-dev` |
+| macOS `cc` / linker not found | `xcode-select --install` |
+| macOS OpenSSL errors | `brew install openssl@3 pkg-config` and export `PKG_CONFIG_PATH` |
+
+### Work on Solidity contracts
+
+```bash
+cd ~/src/covenant-gov/pacto-gov
+forge install
+forge build
+forge test
+```
+
+Deploy against the local Anvil node:
+
+```bash
+forge script script/Deploy.s.sol --rpc-url http://localhost:8545 --broadcast --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+```
+
+Use the same RPC and key for `pacto-squad-sponsor` and `delegated-security-manager`.
+
+#### Make `pacto-app` use freshly deployed contracts
+
+After running the deploy script, note the printed contract addresses. Then:
+
+1. Find the contract-address config file in `pacto-app` (often under `src-tauri/src/evm/contracts/` or `.env.local`).
+2. Update the fields for `PactoGov`, `SquadSponsor`, or `DelegatedSecurityManager` to the addresses from the deploy output.
+3. Restart `pnpm run tauri:dev` if the values are read only at Tauri startup.
+
+If the app does not expose a config file, search the Rust source for the current contract address constants and replace them temporarily for local testing — but **do not commit hardcoded local addresses**.
+
+### Work on `pacto-aztec`
+
+Start the Aztec profile:
+
+```bash
+cd pacto-dev-env
 docker compose --profile aztec up -d --build
 ```
 
-This adds the Aztec local network on `http://localhost:8080` and admin API on `http://localhost:8880`. The Aztec container deploys its own rollup contracts to the local Anvil, so Anvil must be healthy first.
-
-> The Aztec service is heavy. Allocate at least 8 GB of RAM to Docker and expect a 2–3 minute startup while it deploys L1 contracts.
-
-### NIP-46 bunker
-
-Enable the bunker profile when you need to test remote signing:
+Then follow the Aztec project's own README:
 
 ```bash
-docker compose --profile bunker up -d --build
+cd ~/src/covenant-gov/pacto-aztec
+pnpm install
+pnpm compile   # compiles Noir contracts
+pnpm test      # runs tests against the sandbox
 ```
 
-This starts a Bunker46 server (server only, no web UI) on `http://127.0.0.1:3001` with Postgres and Redis. Generate real secrets before using it outside of local testing:
+The Aztec RPC is at `http://localhost:8080`.
+
+### Work on `nostr-k-derivs`
 
 ```bash
-cd dev-setup
-cat > .env <<EOF
-JWT_SECRET=$(openssl rand -base64 48)
-JWT_REFRESH_SECRET=$(openssl rand -base64 48)
-ENCRYPTION_KEY=$(openssl rand -base64 48)
-EOF
-docker compose --profile bunker up -d
+cd ~/src/covenant-gov/nostr-k-derivs
+cargo build
+cargo test
 ```
 
-For local bot development you can also use the daemon's `nsec` backend; do not commit private keys.
 
-## Port reference
+---
 
-| Service | URL | Docker service |
-|---------|-----|----------------|
-| Nostr relay | `ws://localhost:7000` | `nostr-relay` |
-| Anvil EVM | `http://localhost:8545` | `anvil` |
-| Aztec sandbox | `http://localhost:8080` | `aztec-sandbox` (profile `aztec`) |
-| Aztec admin | `http://localhost:8880` | `aztec-sandbox` (profile `aztec`) |
-| NIP-46 bunker | `http://127.0.0.1:3001` | `nip46-bunker` (profile `bunker`) |
+## Port and endpoint reference
 
-## Notes
+| Service | URL | Docker service | Notes |
+|---------|-----|----------------|-------|
+| Nostr relay | `ws://localhost:7000` | `nostr-relay` | Default stack |
+| Anvil EVM | `http://localhost:8545` | `anvil` | Chain ID 31337 |
+| Aztec sandbox | `http://localhost:8080` | `aztec-sandbox` | Profile `aztec` |
+| Aztec admin | `http://localhost:8880` | `aztec-sandbox` | Profile `aztec` |
+| NIP-46 bunker | `http://127.0.0.1:3001` | `nip46-bunker` | Profile `bunker` |
+
+---
+
+## Recommended daily workflow
+
+1. Start Docker services: `cd pacto-dev-env && docker compose up -d --build`.
+2. If working on Aztec, add the profile: `docker compose --profile aztec up -d --build`.
+3. In one terminal, run `pacto-app`: `cd pacto-app && pnpm run tauri:dev`.
+4. In another terminal, deploy governance contracts to Anvil and copy addresses into the app's network config.
+5. Iterate. Re-run `cargo test`, `forge test`, or `pnpm test` as appropriate.
+
+---
+
+## Notes and caveats
 
 - All images are built locally for the host architecture (arm64 on Apple Silicon, x86_64 on Linux). No `platform: linux/amd64` pinning or Rosetta emulation is required.
 - First `docker compose up --build` will take several minutes because it compiles Foundry, nostr-rs-relay, Bunker46, and the Aztec wrapper from source.
 - If Anvil emulation is too slow on an M4 Mac, run `anvil` natively via `foundryup` instead and stop the `anvil` container.
 - Aztec's sandbox is the heaviest service. Do not start it unless you are actively working on `pacto-aztec`.
 - Private keys should never be committed. The `nsec` signing backend is for local testing only.
+
+---
+
+## Troubleshooting
+
+### Docker containers fail to start
+
+- Confirm Docker has enough RAM (12+ GB when running Aztec).
+- Check logs: `cd pacto-dev-env && docker compose logs -f`.
+
+### `pacto-app` cannot connect to the local relay
+
+- Verify the relay is listening: `curl http://localhost:7000` should return a landing page or relay info.
+- In Pacto settings, add `ws://localhost:7000` as a relay.
+
+
+### Foundry/Anvil deployment fails
+
+- Confirm the Anvil container is running and RPC responds:
+  `cast block-number --rpc-url http://localhost:8545`.
+- Use the default Anvil private key for local deployments; never commit real keys.
+
+### Aztec sandbox is slow or OOMs
+
+- Increase Docker memory limit to at least 8 GB, preferably 12 GB.
+- Stop other containers you are not actively using.
+
+---
+
+## Security notes for local development
+
+- All local services bind to `localhost` only by default. Do not expose Anvil, the relay, or the NIP-46 bunker to the public internet.
+- Never commit private keys or bunker URIs to Git.
+---
+
+## Sources
+
+- Pacto ecosystem overview: `pacto_ecosystem_research.md`
+- Pacto architecture: `pacto-bot-architecture-deep-dive.md`
+- Upstream Pacto README: https://github.com/covenant-gov/pacto-app/blob/main/README.md
+- Upstream build guide: https://github.com/covenant-gov/pacto-app/blob/main/docs/build/ubuntuGuide.md
+- Upstream macOS guide: https://github.com/covenant-gov/pacto-app/blob/main/docs/build/macGuide.md
