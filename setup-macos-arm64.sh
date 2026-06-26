@@ -184,11 +184,11 @@ main() {
   install_foundry
   install_aztec_cli
   configure_shell
-  clone_repos "${1:-$HOME/src/covenant-gov}"
+  clone_repos "${1:-}"
   verify_install
   log "Setup complete. Open a new shell to pick up environment changes."
   log "Next steps:"
-  log "  cd $HOME/src/covenant-gov/pacto-app"
+  log "  cd <your-clone-dir>/pacto-app"
   log "  pnpm install"
   log "  pnpm tauri dev"
 }

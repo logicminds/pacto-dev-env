@@ -277,12 +277,101 @@ configure_shell() {
 # ---------------------------------------------------------------------------
 
 clone_repos() {
-  local base_dir="${1:-$HOME/src/covenant-gov}"
-  log "Cloning Pacto ecosystem repositories into $base_dir..."
+  local base_dir="${1:-}"
+
+  # If no directory was supplied as an argument, ask the user.
+  if [[ -z "$base_dir" ]]; then
+    echo
+    read -r -p "Where should the Pacto ecosystem repos be cloned? [${HOME}/src/covenant-gov]: " base_dir
+    base_dir="${base_dir:-$HOME/src/covenant-gov}"
+  fi
+
+  # Expand ~ and resolve to absolute path for display.
+  base_dir="${base_dir/#\~/$HOME}"
+
+  local all_repos=(
+    "pacto-app:desktop client, most users need this"
+    "pacto-gov:Solidity governance contracts"
+    "pacto-squad-sponsor:gas fee sponsorship contract"
+    "pacto-aztec:Aztec privacy layer"
+    "nostr-k-derivs:Nostr-to-chain key derivation"
+    "delegated-security-manager:Hats-based security module"
+    "pacto-download:download site"
+  )
+
+  echo
+  echo "Toggle repositories on/off by number, then press Enter to clone."
+  echo "Enter 'all' to select everything, 'none' to skip cloning, or numbers"
+  echo "separated by spaces to toggle each repo (e.g. '1 2 4')."
+  echo
+
+  # Default selection: only pacto-app is selected.
+  local selected=(1 0 0 0 0 0 0)
+
+  local idx name desc
+  for idx in "${!all_repos[@]}"; do
+    name="${all_repos[$idx]%%:*}"
+    desc="${all_repos[$idx]#*:}"
+    if [[ "${selected[$idx]}" -eq 1 ]]; then
+      echo "  [$((idx+1))] [X] $name - $desc"
+    else
+      echo "  [$((idx+1))] [ ] $name - $desc"
+    fi
+  done
+  echo
+
+  read -r -p "Selection [1]: " selection
+  selection="${selection:-1}"
+
+  # Handle special keywords.
+  if [[ "$selection" =~ ^[[:space:]]*all[[:space:]]*$ ]]; then
+    selected=(1 1 1 1 1 1 1)
+  elif [[ "$selection" =~ ^[[:space:]]*none[[:space:]]*$ ]]; then
+    selected=(0 0 0 0 0 0 0)
+  else
+    # Treat each entered number as a toggle.
+    for n in $selection; do
+      if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#all_repos[@]} )); then
+        selected[$((n-1))]=$((1 - selected[$((n-1))]))
+      else
+        warn "Ignoring invalid selection: $n"
+      fi
+    done
+  fi
+
+  local repos=()
+  for idx in "${!all_repos[@]}"; do
+    if [[ "${selected[$idx]}" -eq 1 ]]; then
+      repos+=("${all_repos[$idx]%%:*}")
+    fi
+  done
+
+  echo
+  echo "Will clone:"
+  if [[ ${#repos[@]} -eq 0 ]]; then
+    echo "  (none)"
+  else
+    for repo in "${repos[@]}"; do
+      echo "  - $repo"
+    done
+  fi
+
+  read -r -p "Continue? [Y/n]: " confirm
+  confirm="${confirm:-Y}"
+  if [[ ! "$confirm" =~ ^[Yy] ]]; then
+    warn "Clone step cancelled by user."
+    return 0
+  fi
+
+  if [[ ${#repos[@]} -eq 0 ]]; then
+    warn "No repositories selected; skipping clone step."
+    return 0
+  fi
+
+  log "Cloning selected repositories into $base_dir..."
   mkdir -p "$base_dir"
 
-  for repo in pacto-app pacto-gov pacto-squad-sponsor pacto-aztec \
-              nostr-k-derivs delegated-security-manager pacto-download; do
+  for repo in "${repos[@]}"; do
     if [[ ! -d "$base_dir/$repo" ]]; then
       git clone "https://github.com/covenant-gov/$repo.git" "$base_dir/$repo"
     else
@@ -292,40 +381,10 @@ clone_repos() {
 }
 
 # ---------------------------------------------------------------------------
-# Verification
-# ---------------------------------------------------------------------------
-
-verify_install() {
-  log "Verifying installed tools..."
-
-  export PATH="$HOME/.cargo/bin:$HOME/.foundry/bin:$HOME/.aztec/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.linuxbrew/bin:$PATH"
-  source "$HOME/.cargo/env" 2>/dev/null || true
-
-  docker --version
-  docker compose version
-  rustc --version
-  cargo --version
-  node --version
-  pnpm --version
-  forge --version
-  anvil --version
-  cast --version
-  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv 2>/dev/null || "$HOME/.linuxbrew/bin/brew" shellenv 2>/dev/null || true)"
-  brew --version | head -1
-  gh --version | head -1
-  if command_exists aztec-sandbox; then
-    aztec-sandbox --version 2>/dev/null || warn "aztec-sandbox present but could not print version."
-  else
-    warn "aztec-sandbox binary not on PATH yet — open a new shell."
-  fi
-}
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 main() {
-  log "Starting Pacto dev setup for Ubuntu LTS..."
 
   if [[ "$EUID" -eq 0 ]] && [[ -z "${SUDO_USER:-}" ]]; then
     warn "Running as root. The script will install tools for root, not for your desktop user."
@@ -348,12 +407,12 @@ main() {
   install_brew
   install_gh_cli
   configure_shell
-  clone_repos "${1:-$HOME/src/covenant-gov}"
+  clone_repos "${1:-}"
   verify_install
 
   log "Setup complete. Open a new shell (or run \`source ~/.bashrc\`) to pick up environment changes."
   log "Next steps:"
-  log "  cd $HOME/src/covenant-gov/pacto-app"
+  log "  cd <your-clone-dir>/pacto-app"
   log "  pnpm install"
   log "  pnpm run tauri:dev"
   log ""
