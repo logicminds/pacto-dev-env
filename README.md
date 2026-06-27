@@ -422,6 +422,6 @@ redis-cli -h nip46-bunker-redis ping
 ## Sources
 
 - Pacto ecosystem overview: `docs/pacto_ecosystem_research.md`
-- Upstream Pacto README: https://github.com/covenant-gov/pacto-app/blob/main/README.md
-- Upstream build guide: https://github.com/covenant-gov/pacto-app/blob/main/docs/build/ubuntuGuide.md
-- Upstream macOS guide: https://github.com/covenant-gov/pacto-app/blob/main/docs/build/macGuide.md
+- Pacto README: https://github.com/covenant-gov/pacto-app/blob/main/README.md
+- build guide: https://github.com/covenant-gov/pacto-app/blob/main/docs/build/ubuntuGuide.md
+- macOS guide: https://github.com/covenant-gov/pacto-app/blob/main/docs/build/macGuide.md
