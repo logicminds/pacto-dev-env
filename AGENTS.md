@@ -137,7 +137,8 @@ Installed skills (see `skills-lock.json`):
 | `m15-anti-pattern` | `zhanghandong/rust-skills` | Anti-patterns and code-smell detection |
 | `cargo-fuzz` | `trailofbits/skills` | Fuzzing with `cargo-fuzz` and `libFuzzer` |
 | `cargo-nextest` | `laurigates/claude-plugins` | Fast, structured test runs with `cargo nextest` |
-| `code-reviewer` | `google-gemini/gemini-cli` | Structured code-review methodology |
+| `ce-compound` | `everyinc/compound-engineering-plugin` | Document solved problems and project vocabulary in `docs/solutions/` |
+| `ce-compound-refresh` | `everyinc/compound-engineering-plugin` | Audit and refresh stale learnings against the current codebase |
 
 To add or update a skill:
 
@@ -152,7 +153,7 @@ rsync -a .agents/skills/<skill-name>/ .omp/skills/<skill-name>/
 npx skills update -y
 ```
 
-Security note: `cargo-fuzz` and `code-reviewer` are flagged as higher-risk by the skills.sh scanner because they invoke compilers/fuzzers and review arbitrary code. They come from reputable sources (Trail of Bits, Google Gemini) and are safe for this repository, but review skill contents before installing updates.
+Security note: `cargo-fuzz` is flagged as higher-risk by the skills.sh scanner because it invokes compilers and fuzzers. It comes from a reputable source (Trail of Bits) and is safe for this repository, but review skill contents before installing updates.
 
 ## Runtime/Tooling Preferences
 
