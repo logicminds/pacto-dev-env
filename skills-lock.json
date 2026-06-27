@@ -13,11 +13,17 @@
       "skillPath": "rust-plugin/skills/cargo-nextest/SKILL.md",
       "computedHash": "3e7b273e5b6d6100a6a8e759dc161252238f543e837f860018e5764ade0667e9"
     },
-    "code-reviewer": {
-      "source": "google-gemini/gemini-cli",
+    "ce-compound": {
+      "source": "everyinc/compound-engineering-plugin",
       "sourceType": "github",
-      "skillPath": ".gemini/skills/code-reviewer/SKILL.md",
-      "computedHash": "270f0dd1d4c15a798bad5253a309cdc2056fe5322f99ba06ca22ce50581adc02"
+      "skillPath": "skills/ce-compound/SKILL.md",
+      "computedHash": "0c8342b6f2ad29abf94871be536a6ef57fa7d11bdee4f7b78206a356d4b680d9"
+    },
+    "ce-compound-refresh": {
+      "source": "everyinc/compound-engineering-plugin",
+      "sourceType": "github",
+      "skillPath": "skills/ce-compound-refresh/SKILL.md",
+      "computedHash": "7a77743001dd3521cb5ebbc7941408ea9874461b111ebc56395ed94d093fd821"
     },
     "m15-anti-pattern": {
       "source": "zhanghandong/rust-skills",
